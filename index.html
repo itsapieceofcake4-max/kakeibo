@@ -139,7 +139,12 @@
     .remember-row input { width:18px; height:18px; cursor:pointer; }
     .login-btn { width:100%; padding:14px; background:#2c6e49; color:white; border:none; border-radius:8px; font-size:16px; font-weight:bold; cursor:pointer; font-family:inherit; }
     .login-btn:hover { background:#235a3b; }
+    .login-btn-sub { width:100%; padding:12px; background:white; color:#2c6e49; border:2px solid #2c6e49; border-radius:8px; font-size:15px; font-weight:bold; cursor:pointer; font-family:inherit; margin-top:8px; }
+    .login-btn-sub:hover { background:#f0f7f3; }
+    .login-divider { display:flex; align-items:center; gap:8px; margin:12px 0; color:#ccc; font-size:12px; }
+    .login-divider::before,.login-divider::after { content:''; flex:1; height:1px; background:#eee; }
     .login-msg { margin-top:12px; font-size:13px; color:#c0392b; min-height:18px; }
+    .login-msg.success { color:#2c6e49; }
     .login-note { margin-top:16px; font-size:11px; color:#bbb; line-height:1.7; }
 
     /* 保存インジケーター */
@@ -248,10 +253,12 @@
       <input type="checkbox" id="login-remember">
       次回から自動ログイン
     </label>
-    <button class="login-btn" onclick="doLogin()">ログイン / 新規登録</button>
+    <button class="login-btn" onclick="doLogin()">🔑 ログイン</button>
+    <div class="login-divider">または</div>
+    <button class="login-btn-sub" onclick="doRegister()">✏️ 新規登録</button>
     <div class="login-msg" id="login-msg"></div>
     <p class="login-note">
-      ※ 初めての方はIDとPWを決めて「ログイン」<br>
+      ※ 初めての方は「新規登録」でIDとPWを決めてください<br>
       ※ 別の端末で同じID・PWを入力するとデータが同期されます
     </p>
   </div>
@@ -594,40 +601,81 @@ const DIR_ID    = '019de102-2e67-7bc0-9f07-e561874bc9e1';
 // =============================================
 //  ログイン / ログアウト
 // =============================================
-async function doLogin() {
+function getLoginInputs() {
   const id = document.getElementById('login-id').value.trim();
   const pw = document.getElementById('login-pw').value;
   const remember = document.getElementById('login-remember').checked;
-  if (!id) { setLoginMsg('IDを入力してください'); return; }
-  if (!pw || pw.length < 4) { setLoginMsg('パスワードは4文字以上にしてください'); return; }
-  setLoginMsg('接続中...');
+  return { id, pw, remember };
+}
+
+function loginSuccess(id, pw, remember) {
+  currentUser = { id, pw };
+  if (remember) localStorage.setItem('kakeibo_auth', JSON.stringify({ id, pw }));
+  else          localStorage.removeItem('kakeibo_auth');
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('header-user').textContent    = '👤 ' + id;
+  renderAll();
+}
+
+async function doLogin() {
+  const { id, pw, remember } = getLoginInputs();
+  if (!id) { setLoginMsg('❌ IDを入力してください'); return; }
+  if (!pw || pw.length < 4) { setLoginMsg('❌ パスワードは4文字以上にしてください'); return; }
+  setLoginMsg('⏳ 接続中...');
   try {
     const blob  = await readSyncBlob();
     const users = blob.users || {};
-
-    if (users[id]) {
-      // ── 既存ユーザー：復号して読み込み ──
-      setLoginMsg('認証中...');
-      let allData;
-      try { allData = await decryptAll(users[id], pw); }
-      catch { setLoginMsg('❌ パスワードが違います'); return; }
-      restoreData(allData);
-    } else {
-      // ── 新規ユーザー：現在のデータを暗号化して登録 ──
-      setLoginMsg('新規登録中...');
-      const encrypted  = await encryptAll(pw);
-      users[id]        = encrypted;
-      blob.users       = users;
-      await writeSyncBlob(blob);
+    if (!users[id]) {
+      setLoginMsg('❌ このIDは登録されていません。「新規登録」を使ってください');
+      return;
     }
+    setLoginMsg('⏳ 認証中...');
+    let allData;
+    try { allData = await decryptAll(users[id], pw); }
+    catch { setLoginMsg('❌ パスワードが違います'); return; }
+    restoreData(allData);
+    loginSuccess(id, pw, remember);
+  } catch(e) {
+    const msg = e.message || 'Unknown error';
+    if (msg.includes('401') || msg.includes('Unauthorized')) {
+      setLoginMsg('❌ 認証エラー：トークンが期限切れです。管理者にご連絡ください');
+    } else if (msg.includes('Failed to fetch') || msg.includes('fetch')) {
+      setLoginMsg('❌ ネットワークエラー：インターネット接続を確認してください');
+    } else {
+      setLoginMsg('❌ ' + msg);
+    }
+  }
+}
 
-    currentUser = { id, pw };
-    if (remember) localStorage.setItem('kakeibo_auth', JSON.stringify({ id, pw }));
-    else          localStorage.removeItem('kakeibo_auth');
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('header-user').textContent    = '👤 ' + id;
-    renderAll();
-  } catch(e) { setLoginMsg('❌ ' + e.message); }
+async function doRegister() {
+  const { id, pw, remember } = getLoginInputs();
+  if (!id) { setLoginMsg('❌ IDを入力してください'); return; }
+  if (!pw || pw.length < 4) { setLoginMsg('❌ パスワードは4文字以上にしてください'); return; }
+  setLoginMsg('⏳ 接続中...');
+  try {
+    const blob  = await readSyncBlob();
+    const users = blob.users || {};
+    if (users[id]) {
+      setLoginMsg('❌ このIDはすでに登録済みです。「ログイン」を使ってください');
+      return;
+    }
+    setLoginMsg('⏳ 新規登録中...');
+    const encrypted = await encryptAll(pw);
+    users[id]       = encrypted;
+    blob.users      = users;
+    await writeSyncBlob(blob);
+    setLoginMsg('');
+    loginSuccess(id, pw, remember);
+  } catch(e) {
+    const msg = e.message || 'Unknown error';
+    if (msg.includes('401') || msg.includes('Unauthorized')) {
+      setLoginMsg('❌ 認証エラー：トークンが期限切れです。管理者にご連絡ください');
+    } else if (msg.includes('Failed to fetch') || msg.includes('fetch')) {
+      setLoginMsg('❌ ネットワークエラー：インターネット接続を確認してください');
+    } else {
+      setLoginMsg('❌ ' + msg);
+    }
+  }
 }
 
 function setLoginMsg(msg) { document.getElementById('login-msg').textContent = msg; }
@@ -1393,7 +1441,8 @@ async function readSyncBlob() {
       'Accept': 'application/vnd.github.v3+json'
     }
   });
-  if (!r.ok) throw new Error('サーバーへの接続に失敗しました');
+  if (r.status === 401 || r.status === 403) throw new Error('401 Unauthorized');
+  if (!r.ok) throw new Error('サーバーへの接続に失敗しました（HTTP ' + r.status + '）');
   const json    = await r.json();
   syncSha       = json.sha;
   const decoded = decodeURIComponent(escape(atob(json.content.replace(/\n/g, ''))));
